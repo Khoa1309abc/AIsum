@@ -1,4 +1,3 @@
-
 import express from 'express';
 import morgan from 'morgan';
 import cors from 'cors';
@@ -12,7 +11,7 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(morgan('dev'));
 
-const allowed = (process.env.ORIGINS || '*').split(',').map(s=>s.trim());
+const allowed = (process.env.ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin || allowed.includes('*') || allowed.includes(origin)) cb(null, true);
@@ -28,7 +27,7 @@ app.use(async (req, res, next) => {
     await limiter.consume(ip || 'anonymous');
     next();
   } catch (e) {
-    res.status(429).json({ ok:false, error: 'Too Many Requests' });
+    res.status(429).json({ ok: false, error: 'Too Many Requests' });
   }
 });
 
@@ -39,7 +38,10 @@ async function callOpenRouter({ system, messages, apiKey, model }) {
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${apiKey || process.env.OPENROUTER_API_KEY}`,
+    'HTTP-Referer': process.env.REFERER || 'http://localhost:3000',
+    'X-Title': process.env.TITLE || 'AI Summarizer Backend'
   };
+
   const body = {
     model: model || DEFAULT_MODEL,
     messages: [
@@ -48,44 +50,62 @@ async function callOpenRouter({ system, messages, apiKey, model }) {
     ],
     temperature: 0.3
   };
+
   const r = await fetch(OPENROUTER_URL, { method: 'POST', headers, body: JSON.stringify(body) });
+  const textResponse = await r.text();
+
   if (!r.ok) {
-    const t = await r.text().catch(()=>'');
-    throw new Error(`OpenRouter ${r.status} ${t}`);
+    console.error('❌ OpenRouter API error:', r.status, textResponse);
+    throw new Error(`OpenRouter ${r.status}: ${textResponse}`);
   }
-  const data = await r.json();
+
+  let data;
+  try {
+    data = JSON.parse(textResponse);
+  } catch (err) {
+    console.error('❌ JSON parse error:', err, textResponse);
+    throw new Error('Invalid JSON response from OpenRouter');
+  }
+
   return data?.choices?.[0]?.message?.content || '';
 }
 
-app.get('/', (req,res)=> res.json({ ok:true, name:'ai-summarizer-backend', version:'1.0.0' }));
+app.get('/', (req, res) => res.json({ ok: true, name: 'ai-summarizer-backend', version: '1.0.1' }));
 
-app.post('/api/summarize', async (req,res)=>{
+app.post('/api/summarize', async (req, res) => {
   try {
     const { system, user, apiKey, model } = req.body || {};
-    if (!user) return res.status(400).json({ ok:false, error: 'Missing user content' });
+    if (!user) return res.status(400).json({ ok: false, error: 'Missing user content' });
+
     const text = await callOpenRouter({
       system: system || 'Bạn là AI tóm tắt.',
       messages: [{ role: 'user', content: user }],
       apiKey, model
     });
-    res.json({ ok:true, text });
+
+    res.json({ ok: true, text });
   } catch (e) {
-    res.status(500).json({ ok:false, error: e?.message || String(e) });
+    console.error('❌ Summarize error:', e);
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
-app.post('/api/chat', async (req,res)=>{
+app.post('/api/chat', async (req, res) => {
   try {
     const { system, messages, apiKey, model } = req.body || {};
-    if (!messages || !Array.isArray(messages)) return res.status(400).json({ ok:false, error:'Missing messages' });
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ ok: false, error: 'Missing messages' });
+    }
+
     const text = await callOpenRouter({ system, messages, apiKey, model });
-    res.json({ ok:true, text });
+    res.json({ ok: true, text });
   } catch (e) {
-    res.status(500).json({ ok:false, error: e?.message || String(e) });
+    console.error('❌ Chat error:', e);
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, ()=> {
-  console.log(`AI Summarizer backend listening on :${port}`);
+app.listen(port, () => {
+  console.log(`✅ AI Summarizer backend listening on :${port}`);
 });
